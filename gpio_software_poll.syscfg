@@ -1,0 +1,158 @@
+/**
+ * These arguments were used when this file was generated. They will be automatically applied on subsequent loads
+ * via the GUI or CLI. Run CLI with '--help' for additional information on how to override these arguments.
+ * @cliArgs --device "MSPM0G350X" --part "Default" --package "LQFP-64(PM)" --product "mspm0_sdk@2.10.00.04"
+ * @v2CliArgs --device "MSPM0G3507" --package "LQFP-64(PM)" --product "mspm0_sdk@2.10.00.04"
+ * @versions {"tool":"1.27.0+4565"}
+ */
+
+/**
+ * Import the modules used in this configuration.
+ */
+const GPIO   = scripting.addModule("/ti/driverlib/GPIO", {}, false);
+const GPIO1  = GPIO.addInstance();
+const GPIO2  = GPIO.addInstance();
+const GPIO3  = GPIO.addInstance();
+const GPIO4  = GPIO.addInstance();
+const GPIO5  = GPIO.addInstance();
+const GPIO6  = GPIO.addInstance();
+const UART   = scripting.addModule("/ti/driverlib/UART", {}, false);
+const UART0  = UART.addInstance();
+const UART1  = UART.addInstance();
+const SYSCTL = scripting.addModule("/ti/driverlib/SYSCTL");
+
+/**
+ * Write custom configuration values to the imported modules.
+ */
+
+const Board = scripting.addModule("/ti/driverlib/Board", {}, false);
+
+/* BUZZER: PB15, output, initial HIGH (active-low buzzer off) */
+GPIO1.$name                          = "BUZZER";
+GPIO1.port                           = "PORTB";
+GPIO1.associatedPins[0].$name        = "BUZZ";
+GPIO1.associatedPins[0].initialValue = "SET";
+GPIO1.associatedPins[0].pin.$assign  = "PB15";
+
+/* MODE_KEY: PA27, input, pull-up, active-low */
+GPIO2.$name                              = "MODE_KEY";
+GPIO2.port                               = "PORTA";
+GPIO2.associatedPins[0].$name            = "KEY";
+GPIO2.associatedPins[0].direction        = "INPUT";
+GPIO2.associatedPins[0].internalResistor = "PULL_UP";
+GPIO2.associatedPins[0].pin.$assign      = "PA27";
+
+/* START_KEY: PA25, input, pull-up, active-low */
+GPIO3.$name                              = "START_KEY";
+GPIO3.port                               = "PORTA";
+GPIO3.associatedPins[0].$name            = "BTN";
+GPIO3.associatedPins[0].direction        = "INPUT";
+GPIO3.associatedPins[0].internalResistor = "PULL_UP";
+GPIO3.associatedPins[0].pin.$assign      = "PA25";
+
+/* GRAY_SENSOR: 8-ch red-light module, AD0=PB0, AD1=PB1, AD2=PB2, OUT=PB3 */
+GPIO4.$name                         = "GRAY_SENSOR";
+GPIO4.port                          = "PORTB";
+GPIO4.associatedPins.create(4);
+GPIO4.associatedPins[0].$name       = "AD0";
+GPIO4.associatedPins[0].pin.$assign = "PB0";
+GPIO4.associatedPins[1].$name       = "AD1";
+GPIO4.associatedPins[1].pin.$assign = "PB1";
+GPIO4.associatedPins[2].$name       = "AD2";
+GPIO4.associatedPins[2].pin.$assign = "PB2";
+GPIO4.associatedPins[3].$name       = "OUT";
+GPIO4.associatedPins[3].direction   = "INPUT";
+GPIO4.associatedPins[3].internalResistor = "PULL_UP";
+GPIO4.associatedPins[3].pin.$assign = "PB3";
+
+/* GPIO_MOTOR: TB6612 4-ch motor driver, 13 output pins (Phase 1 — encoder excluded) */
+GPIO5.$name                         = "GPIO_MOTOR";
+GPIO5.associatedPins.create(13);
+GPIO5.associatedPins[0].$name       = "AIN1";
+GPIO5.associatedPins[0].pin.$assign = "PA8";
+GPIO5.associatedPins[1].$name       = "AIN2";
+GPIO5.associatedPins[1].pin.$assign = "PA13";
+GPIO5.associatedPins[2].$name       = "BIN1";
+GPIO5.associatedPins[2].pin.$assign = "PB9";
+GPIO5.associatedPins[3].$name       = "BIN2";
+GPIO5.associatedPins[3].pin.$assign = "PB19";
+GPIO5.associatedPins[4].$name       = "STBY";
+GPIO5.associatedPins[4].pin.$assign = "PA15";
+GPIO5.associatedPins[5].$name       = "PWMA";
+GPIO5.associatedPins[5].pin.$assign = "PA28";
+GPIO5.associatedPins[6].$name       = "PWMB";
+GPIO5.associatedPins[6].pin.$assign = "PB13";
+GPIO5.associatedPins[7].$name       = "CIN1";
+GPIO5.associatedPins[7].pin.$assign = "PB17";
+GPIO5.associatedPins[8].$name       = "CIN2";
+GPIO5.associatedPins[8].pin.$assign = "PB18";
+GPIO5.associatedPins[9].$name       = "DIN1";
+GPIO5.associatedPins[9].pin.$assign = "PB24";
+GPIO5.associatedPins[10].$name      = "DIN2";
+GPIO5.associatedPins[10].pin.$assign = "PA24";
+GPIO5.associatedPins[11].$name      = "PWMC";
+GPIO5.associatedPins[11].pin.$assign = "PB4";
+GPIO5.associatedPins[12].$name      = "PWMD";
+GPIO5.associatedPins[12].pin.$assign = "PB20";
+
+/* GPIO_ENCODER: temporary encoder input test pins, 4 wheels x A/B */
+GPIO6.$name = "GPIO_ENCODER";
+GPIO6.associatedPins.create(8);
+GPIO6.associatedPins[0].$name = "LF_A";
+GPIO6.associatedPins[0].direction = "INPUT";
+GPIO6.associatedPins[0].internalResistor = "PULL_UP";
+GPIO6.associatedPins[0].pin.$assign = "PA22";
+GPIO6.associatedPins[1].$name = "LF_B";
+GPIO6.associatedPins[1].direction = "INPUT";
+GPIO6.associatedPins[1].internalResistor = "PULL_UP";
+GPIO6.associatedPins[1].pin.$assign = "PA17";
+GPIO6.associatedPins[2].$name = "LR_A";
+GPIO6.associatedPins[2].direction = "INPUT";
+GPIO6.associatedPins[2].internalResistor = "PULL_UP";
+GPIO6.associatedPins[2].pin.$assign = "PA18";
+GPIO6.associatedPins[3].$name = "LR_B";
+GPIO6.associatedPins[3].direction = "INPUT";
+GPIO6.associatedPins[3].internalResistor = "PULL_UP";
+GPIO6.associatedPins[3].pin.$assign = "PA12";
+GPIO6.associatedPins[4].$name = "RR_A";
+GPIO6.associatedPins[4].direction = "INPUT";
+GPIO6.associatedPins[4].internalResistor = "PULL_UP";
+GPIO6.associatedPins[4].pin.$assign = "PB8";
+GPIO6.associatedPins[5].$name = "RR_B";
+GPIO6.associatedPins[5].direction = "INPUT";
+GPIO6.associatedPins[5].internalResistor = "PULL_UP";
+GPIO6.associatedPins[5].pin.$assign = "PB12";
+GPIO6.associatedPins[6].$name = "RF_A";
+GPIO6.associatedPins[6].direction = "INPUT";
+GPIO6.associatedPins[6].internalResistor = "PULL_UP";
+GPIO6.associatedPins[6].pin.$assign = "PB16";
+GPIO6.associatedPins[7].$name = "RF_B";
+GPIO6.associatedPins[7].direction = "INPUT";
+GPIO6.associatedPins[7].internalResistor = "PULL_UP";
+GPIO6.associatedPins[7].pin.$assign = "PA31";
+
+/* DEBUG_UART: UART0, PA10=TX, PA11=RX, 9600 baud */
+UART0.$name                    = "DEBUG_UART";
+UART0.targetBaudRate           = 9600;
+UART0.peripheral.$assign       = "UART0";
+UART0.peripheral.txPin.$assign = "PA10";
+UART0.peripheral.rxPin.$assign = "PA11";
+
+/* VISION_UART: UART1, PB6=TX, PB7=RX, 9600 baud */
+UART1.$name                    = "VISION_UART";
+UART1.targetBaudRate           = 9600;
+UART1.peripheral.$assign       = "UART1";
+UART1.peripheral.txPin.$assign = "PB6";
+UART1.peripheral.rxPin.$assign = "PB7";
+
+SYSCTL.forceDefaultClkConfig = true;
+SYSCTL.clockTreeEn           = true;
+
+/**
+ * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
+ * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
+ * re-solve from scratch.
+ */
+Board.peripheral.$suggestSolution            = "DEBUGSS";
+Board.peripheral.swclkPin.$suggestSolution   = "PA20";
+Board.peripheral.swdioPin.$suggestSolution   = "PA19";
