@@ -1,0 +1,27 @@
+# Build outputs
+Debug/
+Release/
+*.out
+*.map
+*.obj
+*.o
+*.d
+*.hex
+*.elf
+*.bin
+
+# CCS / Eclipse local metadata
+.metadata/
+.launches/
+*.launch
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+~$*
+
+# OS files
+Thumbs.db
+Desktop.ini
