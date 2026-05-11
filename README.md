@@ -9,39 +9,35 @@
 - 启动按键
 - 蜂鸣器提示
 - 树莓派视觉 UART 通信
-- 底盘接口合同与 dry-run 模拟
+- 底盘循迹控制（PID + 路线表 + 传感器掩码）
 - 后续云台与系统集成
 
 ## 当前进度
 
 已完成并实测通过：
 
+- **基础行进 A→C 全流程稳定通过**（路线表驱动，7 节点动作序列）
+- 路线表驱动的节点动作分发（RIGHT/LEFT/STRAIGHT/STOP）
+- 转弯传感器掩码机制，消除三岔路口对面线干扰
+- 转弯后冷却期，防止转弯退出后立即反转
+- PID 输出低通滤波，消除传感器抖动导致的抽搐
+- 丢线惯性滑行期，避免短暂丢线触发旋转找线
 - PA27 模式切换按键，低电平按下，空闲状态下循环切换 `DRV -> NAV -> ADV`
 - PA25 启动按键，低电平按下，长按 3 秒触发启动
 - PB15 有源蜂鸣器，低电平触发
 - UART1 视觉通信，`PB6=TX`、`PB7=RX`、`9600 8N1`
 - UART1 RX 纯中断接收，避免轮询与中断并发驱动同一解析器
 - 视觉结果通过原子读取/清除接口从 UART ISR 交给主状态机
-- 视觉文本帧解析：
-  - `$CIRCLE,A,1\r\n`
-  - `$TRIANGLE,B,1\r\n`
-  - `$RECT,C,1\r\n`
-  - `$PENTAGON,D,1\r\n`
-  - `$NONE,X,0\r\n`
-- 主控状态机 + 底盘 dry-run 已升级为真实桥接消费：
-  - `DRV` 基础行进（真实 `track_bridge_get()` → PID 差速循迹）
-  - `NAV` 基础导航
-  - `ADV` 高级导航占位流程
-- 八路灰度传感器接入，PB0~PB3，AD0/AD1/AD2+OUT 复用式读取，DEBUG_UART 可观测
-- 循迹抽象层，质心加权误差计算，有界偏差输出 [-100,+100]，中心命中/丢线判断，DEBUG_UART 可观测
-- 循迹桥接准备层，主控→底盘数据合同，stale 生命周期正确，硬件验收通过
-- 底盘接口合同文档：`CHASSIS_INTERFACE_CONTRACT.md`
+- 八路灰度传感器接入，PB0~PB3，AD0/AD1/AD2+OUT 复用式读取
+- 循迹抽象层，最长黑带中心误差计算，有界偏差输出 [-100,+100]
+- 循迹桥接准备层，主控→底盘数据合同，stale 生命周期正确
+- 四路电机 PWM 驱动 + 加减速斜坡
+- 底盘 PID 差速循迹（Kp=30, Ki=0, Kd=16）
 
 暂未完成：
 
-- 真实底盘电机驱动器实机接入（TB6612 PWM 底层驱动待合入）
+- A/B/D 目标路线表（结构已就绪，只需补充动作序列）
 - 编码器速度闭环（`CHASSIS_USE_ENCODER=0`，后续联调打开）
-- 路口动作表与路径策略
 - 云台 PWM 或步进电机实物控制
 - 树莓派 OpenCV 实机识别程序接入
 - 电源系统和整车联调
@@ -230,12 +226,21 @@ motor_set_speed(L, R)                  [Hardware A TB6612 驱动]
 
 | 宏 | 默认值 | 说明 |
 |------|--------|------|
-| `CHASSIS_USE_TRACK_BRIDGE` | `1` | 主输入路径：1=bridge, 0=stub fallback（占位，需硬件 A 驱动合入后可用） |
-| `CHASSIS_TRACK_ERROR_SCALE` | `7` | bridge error [-100,+100] → PID 误差尺度 |
-| `CHASSIS_LOST_LINE_SHORT_TICKS` | `6` | 短时丢线进入找线旋转（~60ms） |
-| `CHASSIS_LOST_LINE_LONG_TICKS` | `150` | 长时丢线刹车保护（~1500ms） |
+| `CHASSIS_USE_TRACK_BRIDGE` | `1` | 主输入路径：1=bridge, 0=stub fallback |
+| `CHASSIS_TRACK_ERROR_SCALE` | `1` | bridge error [-100,+100] → PID 误差尺度 |
+| `CHASSIS_BASE_SPEED` | `16` | 直线基础速度 |
+| `CHASSIS_CURVE_SPEED` | `10` | 弯道降速 |
+| `CHASSIS_FIND_SPEED` | `40` | 丢线旋转找线速度 |
+| `CHASSIS_TURN_PRIORITY_SPEED` | `60` | 路口转弯原地旋转速度 |
+| `CHASSIS_TURN_PRIORITY_TICKS` | `42` | 转弯最大持续 tick 数 |
+| `CHASSIS_TURN_PRIORITY_MIN_TICKS` | `25` | 转弯盲转最小 tick 数（不检查退出条件） |
+| `CHASSIS_TURN_COOLDOWN_TICKS` | `100` | 转弯后冷却期 tick 数 |
+| `CHASSIS_LOST_LINE_SHORT_TICKS` | `18` | 丢线惯性滑行期（180ms），之后进入旋转找线 |
+| `CHASSIS_LOST_LINE_LONG_TICKS` | `180` | 长时丢线刹车保护（1800ms） |
 | `CHASSIS_NODE_ACTIVE_COUNT_THRESHOLD` | `6` | active_count ≥ 此值视为节点/交叉 |
+| `CHASSIS_CROSS_CONFIRM` | `4` | 节点确认帧数 |
 | `CHASSIS_USE_ENCODER` | `0` | 编码器闭环，首轮默认关闭 |
+| PID 参数 | Kp=30, Ki=0, Kd=16 | 输出限幅 ±30 |
 
 ### 安全规则
 
@@ -264,9 +269,9 @@ motor_set_speed(L, R)                  [Hardware A TB6612 驱动]
 
 | 模式 | 调试显示 | 当前行为 |
 |---|---|---|
-| 基础行进 | `DRV` | 不等待视觉结果，启动后 dry-run 前往 C |
-| 基础导航 | `NAV` | 等待固定视角视觉结果，收到目标后 dry-run 前往 A/B/C/D |
-| 高级导航 | `ADV` | 进入云台扫描占位状态，收到视觉目标后停止扫描并 dry-run 前往目标 |
+| 基础行进 | `DRV` | 不等待视觉结果，启动后按路线表循迹前往 C（已实测通过） |
+| 基础导航 | `NAV` | 等待固定视角视觉结果，收到目标后循迹前往 A/B/C/D |
+| 高级导航 | `ADV` | 进入云台扫描占位状态，收到视觉目标后停止扫描并循迹前往目标 |
 
 ## 状态输出
 
@@ -295,8 +300,8 @@ S=IDLE M=DRV T=- C=IDL G=X1:0 X2:0 X3:0 X4:1 X5:1 X6:0 X7:0 X8:0 L=E:+000 HIT B=
 1. 上电后默认 `DRV`
 2. 长按 PA25 约 3 秒
 3. 蜂鸣器响 3 声
-4. 进入 `RUN`，底盘 dry-run 状态为 `FLIN`
-5. 约 3 秒后模拟到达
+4. 进入 `RUN`，按路线表循迹：RIGHT→LEFT→STRAIGHT→RIGHT→LEFT→RIGHT→STOP
+5. 到达 C 点后自动停车
 6. 蜂鸣器响 1 声，回到 `IDLE`
 
 ### 2. 基础导航 NAV
@@ -351,7 +356,7 @@ $SHAPE,TARGET,VALID\r\n
 
 ## 底盘接口
 
-当前 `chassis_iface.c` 是 dry-run 实现，不驱动真实电机。
+`chassis_iface.c` 实现了完整的循迹控制，包括 PID 差速、路线表、传感器掩码和丢线保护。
 
 主控只通过 `chassis_iface.h` 访问底盘：
 
@@ -364,12 +369,27 @@ void chassis_stop(void);
 ChassisStatus_t chassis_get_status(void);
 ```
 
-后续与硬件 A 合并时，只替换 `chassis_iface.c` 内部实现：
+## 路线表（Route Table）
 
-- 如果单工程合并：调用硬件 A 的循迹/路线函数
-- 如果双控制器通信：在 `chassis_iface.c` 内发送命令帧并接收状态帧
+基础行进 A→C 使用表驱动的节点动作序列：
 
-详细合同见 `CHASSIS_INTERFACE_CONTRACT.md`。
+| 节点 | 动作 | 物理位置 |
+|------|------|----------|
+| 1 | RIGHT | 出发后第一个路口右转 |
+| 2 | LEFT | 左转进入小正方形上边 |
+| 3 | STRAIGHT | 直行通过中间圆环连接处 |
+| 4 | RIGHT | 右转出小正方形 |
+| 5 | LEFT | 左转 |
+| 6 | RIGHT | 右转接近C点 |
+| 7 | STOP | 到达C点停车 |
+
+节点检测：`active_count >= 6` 持续 4 个 tick 确认为节点。
+
+转弯保护机制：
+- 传感器掩码：右转时屏蔽 X1/X2，左转时屏蔽 X7/X8
+- 盲转期：前 25 个 tick 不检查退出条件
+- 冷却期：转弯退出后 100 个 tick 屏蔽新的 turn_hint
+- STRAIGHT 动作：屏蔽 turn_hint 触发和 bias，防止被岔路带偏
 
 ## 主要文件
 
@@ -392,10 +412,10 @@ ChassisStatus_t chassis_get_status(void);
 
 建议优先级：
 
-1. 实现云台最小动作闭环：回中、扫描步进、识别后停止
-2. 与视觉同学联调树莓派 OpenCV 真实输出帧
-3. 与硬件 A 同学确认底盘接口合同
-4. 将 dry-run 底盘替换为真实底盘适配层
+1. 补充 A/B/D 目标路线表（只需新增动作序列数组）
+2. 实现云台最小动作闭环：回中、扫描步进、识别后停止
+3. 与视觉同学联调树莓派 OpenCV 真实输出帧
+4. 加入编码器速度闭环，提升循迹精度和一致性
 5. 做整车供电、线缆、启动顺序和异常保护测试
 
 ## Git 提交说明

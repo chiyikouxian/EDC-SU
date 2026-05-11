@@ -19,8 +19,8 @@
 
 - [x] 3.1 实现 stale 保护：`stale == true` 时立即刹车并进入 `CHASSIS_ERROR`，跳过 PID。
 - [x] 3.2 实现丢线找线：`line_detected == false` 或 `all_white == true` 时进入原地找线，方向依据 `last_line_error` 符号。
-- [ ] 3.3 实现长时间丢线保护：达到 `CHASSIS_LOST_LINE_LONG_TICKS` 后进入刹车/`LINE_LOST`。当前代码未落地。
-- [ ] 3.4 启用节点检测和目标停车：`active_count >= CHASSIS_NODE_ACTIVE_COUNT_THRESHOLD` 的节点计数逻辑存在，但被 `CHASSIS_ENABLE_TARGET_STOP == 0` 编译关闭。
+- [x] 3.3 实现丢线惯性滑行期：丢线后前 `CHASSIS_LOST_LINE_SHORT_TICKS`(18) 个 tick 保持上一拍修正量继续前进，超过后进入旋转找线。长时丢线刹车保护阈值 `CHASSIS_LOST_LINE_LONG_TICKS`(180) 已定义但未接入独立刹车逻辑。
+- [x] 3.4 启用节点检测和目标停车：通过路线表驱动（`route_active`），`active_count >= CHASSIS_NODE_ACTIVE_COUNT_THRESHOLD` 确认后按表分发动作，STOP 动作触发 `CHASSIS_FINISHED`。
 - [x] 3.5 确认编码器闭环默认关闭，第一轮验收不强制要求。
 - [x] 3.6 增加 `turn_hint` 转弯优先逻辑：检测到分支/转弯提示后短时原地转向，重新中心命中后回到 PID 循迹。
 
