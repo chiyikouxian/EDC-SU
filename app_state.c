@@ -31,7 +31,7 @@
  * will enter CHASSIS_ERROR.
  */
 #define BASIC_NAV_BYPASS_VISION   1
-#define BASIC_NAV_DEBUG_TARGET    TARGET_D
+#define BASIC_NAV_DEBUG_TARGET    TARGET_C
 
 static AppState_t    state;
 static RunMode_t     run_mode;

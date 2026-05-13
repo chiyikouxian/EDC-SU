@@ -82,6 +82,26 @@ static const route_action_t route_nav_center_to_a[] = {
     ROUTE_ACTION_STOP       /* node 6: arrive at A */
 };
 
+/* NAV/ADV route: center to B (field-verified). */
+static const route_action_t route_nav_center_to_b[] = {
+    ROUTE_ACTION_RIGHT,     /* node 1 */
+    ROUTE_ACTION_LEFT,      /* node 2 */
+    ROUTE_ACTION_LEFT,      /* node 3 */
+    ROUTE_ACTION_RIGHT,     /* node 4 */
+    ROUTE_ACTION_RIGHT,     /* node 5 */
+    ROUTE_ACTION_STOP       /* node 6: arrive at B */
+};
+
+/* NAV/ADV route: center to C (field-verified). */
+static const route_action_t route_nav_center_to_c[] = {
+    ROUTE_ACTION_RIGHT,     /* node 1 */
+    ROUTE_ACTION_LEFT,      /* node 2 */
+    ROUTE_ACTION_LEFT,      /* node 3 */
+    ROUTE_ACTION_RIGHT,     /* node 4 */
+    ROUTE_ACTION_LEFT,      /* node 5 */
+    ROUTE_ACTION_STOP       /* node 6: arrive at C */
+};
+
 /* NAV/ADV route: center to D (field-verified).
    First four actions match center-to-A; node 5 turns right to D. */
 static const route_action_t route_nav_center_to_d[] = {
@@ -93,13 +113,6 @@ static const route_action_t route_nav_center_to_d[] = {
     ROUTE_ACTION_STOP       /* node 6: arrive at D */
 };
 
-/*
- * NAV/ADV center to B, C: NOT YET CONFIRMED.
- * No route tables exist for these targets.
- * Calling code MUST treat the absence of a route as an error,
- * not fall back to free line following.
- */
-
 #define ARRAY_LEN(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 /* Select route table by (mode, target).
@@ -107,6 +120,8 @@ static const route_action_t route_nav_center_to_d[] = {
    Only confirmed combinations:
      DRV + TARGET_C           -> route_drv_a_to_c
      BASIC_NAV/ADVANCED_NAV + TARGET_A -> route_nav_center_to_a
+     BASIC_NAV/ADVANCED_NAV + TARGET_B -> route_nav_center_to_b
+     BASIC_NAV/ADVANCED_NAV + TARGET_C -> route_nav_center_to_c
      BASIC_NAV/ADVANCED_NAV + TARGET_D -> route_nav_center_to_d */
 static const route_action_t *chassis_route_lookup(RunMode_t mode,
                                                   TargetPoint_t target,
@@ -125,11 +140,16 @@ static const route_action_t *chassis_route_lookup(RunMode_t mode,
         if (target == TARGET_A) {
             table = route_nav_center_to_a;
             len   = ARRAY_LEN(route_nav_center_to_a);
+        } else if (target == TARGET_B) {
+            table = route_nav_center_to_b;
+            len   = ARRAY_LEN(route_nav_center_to_b);
+        } else if (target == TARGET_C) {
+            table = route_nav_center_to_c;
+            len   = ARRAY_LEN(route_nav_center_to_c);
         } else if (target == TARGET_D) {
             table = route_nav_center_to_d;
             len   = ARRAY_LEN(route_nav_center_to_d);
         }
-        /* B/C not confirmed -- table stays NULL */
     }
 
     if (length != NULL) {
@@ -514,15 +534,14 @@ void chassis_follow_target(TargetPoint_t target)
 
     route_index = 0;
     /* Select route by (mode, target).
-       Confirmed: DRV+TARGET_C, NAV/ADV+TARGET_A/D.
-       Unmatched combos (e.g. NAV+TARGET_B) -> ERROR, not free driving. */
+       Confirmed: DRV+TARGET_C, NAV/ADV+TARGET_A/B/C/D.
+       Unmatched combos -> ERROR, not free driving. */
     route_table = chassis_route_lookup(app_state_get_mode(), target, &route_length);
     route_active = (route_table != 0 && route_length > 0) ? 1 : 0;
 
     if (!route_active) {
         /* No route for this mode/target -- fail safe.
-           B/C routes are not yet confirmed and must not
-           fall back to pure line following. */
+           Do not fall back to pure line following. */
         chassis_state = CHASSIS_ERROR;
         return;
     }
