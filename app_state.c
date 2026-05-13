@@ -14,6 +14,25 @@
 #define RUN_TIMEOUT_TICKS    (120u * TICKS_PER_SEC)
 #define SCAN_STEP_INTERVAL   (500 / TICK_MS)
 
+/*
+ * Debug bypass: skip vision UART in BASIC_NAV mode.
+ *
+ * When BASIC_NAV_BYPASS_VISION is 1, the BASIC_NAV start sequence
+ * skips APP_STATE_FIXED_DETECT and directly sets target to
+ * BASIC_NAV_DEBUG_TARGET, then enters the startup beep sequence.
+ * This allows field testing of a single navigation route without
+ * waiting for vision recognition.
+ *
+ * Set BASIC_NAV_BYPASS_VISION back to 0 before production/vision
+ * integration testing.
+ *
+ * Current debug target: TARGET_A (center -> A route confirmed).
+ * Do NOT change to B/C/D -- those routes are not yet confirmed and
+ * will enter CHASSIS_ERROR.
+ */
+#define BASIC_NAV_BYPASS_VISION   1
+#define BASIC_NAV_DEBUG_TARGET    TARGET_D
+
 static AppState_t    state;
 static RunMode_t     run_mode;
 static TargetPoint_t target;
@@ -57,7 +76,17 @@ static void handle_idle(void)
                 buzzer_start_sequence(STARTUP_BEEP_COUNT);
                 break;
             case RUN_MODE_BASIC_NAV:
+#if BASIC_NAV_BYPASS_VISION
+                /* Debug: skip vision, go directly to
+                   center -> TARGET_A route test. */
+                target = BASIC_NAV_DEBUG_TARGET;
+                enter_state(APP_STATE_START_BEEP);
+                buzzer_start_sequence(STARTUP_BEEP_COUNT);
+#else
+                /* Production: wait for vision UART result
+                   before starting navigation. */
                 enter_state(APP_STATE_FIXED_DETECT);
+#endif
                 break;
             case RUN_MODE_ADVANCED_NAV:
                 chassis_lock();

@@ -1,4 +1,5 @@
 #include "chassis_iface.h"
+#include "app_state.h"
 #include "line_track.h"
 #include "motor.h"
 #include "pid.h"
@@ -20,7 +21,7 @@
 
 #define CHASSIS_BASE_SPEED                  16
 #define CHASSIS_CURVE_SPEED                 10
-#define CHASSIS_FIND_SPEED                  40
+#define CHASSIS_FIND_SPEED                  30
 #define CHASSIS_MAX_SPEED                   45
 #define CHASSIS_TURN_LIMIT                  30
 #define CHASSIS_CURVE_ERROR                 45
@@ -29,7 +30,7 @@
 #define CHASSIS_TURN_HINT_CONFIRM_TICKS      1
 #define CHASSIS_TURN_PRIORITY_TICKS         42
 #define CHASSIS_TURN_PRIORITY_MIN_TICKS     25
-#define CHASSIS_TURN_PRIORITY_SPEED         60
+#define CHASSIS_TURN_PRIORITY_SPEED         36
 #define CHASSIS_TURN_COOLDOWN_TICKS         100
 
 typedef enum {
@@ -57,17 +58,85 @@ typedef enum {
     ROUTE_ACTION_STOP
 } route_action_t;
 
-static const route_action_t route_a_to_c[] = {
-    ROUTE_ACTION_RIGHT,     /* node 1: 出发后第一个路口右转 */
-    ROUTE_ACTION_LEFT,      /* node 2: 左转进入小正方形上边 */
-    ROUTE_ACTION_STRAIGHT,  /* node 3: 直行通过中间圆环连接处 */
-    ROUTE_ACTION_RIGHT,     /* node 4: 右转出小正方形 */
-    ROUTE_ACTION_LEFT,      /* node 5: 左转 */
-    ROUTE_ACTION_RIGHT,     /* node 6: 右转接近C点 */
-    ROUTE_ACTION_STOP       /* node 7: 到达C点停车 */
+/* DRV route: A to C (basic drive, field-verified).
+   Keep separate from NAV/ADV routes to avoid mode cross-talk. */
+static const route_action_t route_drv_a_to_c[] = {
+    ROUTE_ACTION_RIGHT,     /* node 1 */
+    ROUTE_ACTION_LEFT,      /* node 2 */
+    ROUTE_ACTION_STRAIGHT,  /* node 3 */
+    ROUTE_ACTION_RIGHT,     /* node 4 */
+    ROUTE_ACTION_LEFT,      /* node 5 */
+    ROUTE_ACTION_RIGHT,     /* node 6 */
+    ROUTE_ACTION_STOP       /* node 7: arrive at C */
 };
 
-#define ROUTE_A_TO_C_LEN  (sizeof(route_a_to_c) / sizeof(route_a_to_c[0]))
+/* NAV/ADV route: center to A (field-verified).
+   Shared by BASIC_NAV and ADVANCED_NAV when target is A.
+   Keep separate from DRV A-to-C route to avoid mode cross-talk. */
+static const route_action_t route_nav_center_to_a[] = {
+    ROUTE_ACTION_RIGHT,     /* node 1 */
+    ROUTE_ACTION_LEFT,      /* node 2 */
+    ROUTE_ACTION_LEFT,      /* node 3 */
+    ROUTE_ACTION_RIGHT,     /* node 4 */
+    ROUTE_ACTION_LEFT,      /* node 5 */
+    ROUTE_ACTION_STOP       /* node 6: arrive at A */
+};
+
+/* NAV/ADV route: center to D (field-verified).
+   First four actions match center-to-A; node 5 turns right to D. */
+static const route_action_t route_nav_center_to_d[] = {
+    ROUTE_ACTION_RIGHT,     /* node 1 */
+    ROUTE_ACTION_LEFT,      /* node 2 */
+    ROUTE_ACTION_LEFT,      /* node 3 */
+    ROUTE_ACTION_RIGHT,     /* node 4 */
+    ROUTE_ACTION_RIGHT,     /* node 5 */
+    ROUTE_ACTION_STOP       /* node 6: arrive at D */
+};
+
+/*
+ * NAV/ADV center to B, C: NOT YET CONFIRMED.
+ * No route tables exist for these targets.
+ * Calling code MUST treat the absence of a route as an error,
+ * not fall back to free line following.
+ */
+
+#define ARRAY_LEN(a) ((int)(sizeof(a) / sizeof((a)[0])))
+
+/* Select route table by (mode, target).
+   Returns NULL with *length=0 when no route is defined.
+   Only confirmed combinations:
+     DRV + TARGET_C           -> route_drv_a_to_c
+     BASIC_NAV/ADVANCED_NAV + TARGET_A -> route_nav_center_to_a
+     BASIC_NAV/ADVANCED_NAV + TARGET_D -> route_nav_center_to_d */
+static const route_action_t *chassis_route_lookup(RunMode_t mode,
+                                                  TargetPoint_t target,
+                                                  int *length)
+{
+    const route_action_t *table = NULL;
+    int len = 0;
+
+    if (mode == RUN_MODE_BASIC_DRIVE) {
+        if (target == TARGET_C) {
+            table = route_drv_a_to_c;
+            len   = ARRAY_LEN(route_drv_a_to_c);
+        }
+    } else if (mode == RUN_MODE_BASIC_NAV ||
+               mode == RUN_MODE_ADVANCED_NAV) {
+        if (target == TARGET_A) {
+            table = route_nav_center_to_a;
+            len   = ARRAY_LEN(route_nav_center_to_a);
+        } else if (target == TARGET_D) {
+            table = route_nav_center_to_d;
+            len   = ARRAY_LEN(route_nav_center_to_d);
+        }
+        /* B/C not confirmed -- table stays NULL */
+    }
+
+    if (length != NULL) {
+        *length = len;
+    }
+    return table;
+}
 
 typedef struct {
     int error;
@@ -188,26 +257,41 @@ static const char *chassis_status_name(ChassisStatus_t status)
     }
 }
 
+static const char *chassis_mode_name(RunMode_t mode)
+{
+    switch (mode) {
+        case RUN_MODE_BASIC_DRIVE: return "DRV";
+        case RUN_MODE_BASIC_NAV:   return "NAV";
+        case RUN_MODE_ADVANCED_NAV:return "ADV";
+        default:                   return "?";
+    }
+}
+
 static void chassis_debug_log(const chassis_line_input_t *line)
 {
     static chassis_state_t last_state = (chassis_state_t)0xFF;
     static ChassisStatus_t last_status = (ChassisStatus_t)0xFF;
+    static int last_route_index = -1;
+    RunMode_t mode = app_state_get_mode();
     ChassisStatus_t status = chassis_map_state_to_status(chassis_state);
     char buf[160];
 
     if (!(chassis_state != last_state || status != last_status ||
           line->stale || status == CHASSIS_STATUS_LINE_LOST ||
-          status == CHASSIS_STATUS_ERROR)) {
+          status == CHASSIS_STATUS_ERROR ||
+          (route_active && route_index != last_route_index))) {
         return;
     }
 
     last_state = chassis_state;
     last_status = status;
+    last_route_index = route_index;
 
     (void)snprintf(buf, sizeof(buf),
-        "CH: st=%s ext=%s err=%d line=%d white=%d active=%d stale=%d lost=%d node=%d target=%d lock=%d\r\n",
+        "CH: st=%s ext=%s mode=%s err=%d line=%d white=%d active=%d stale=%d lost=%d node=%d tgt=%d ri=%d/%d lock=%d\r\n",
         chassis_state_name(chassis_state),
         chassis_status_name(status),
+        chassis_mode_name(mode),
         line->error,
         line->line_detected,
         line->all_white,
@@ -216,6 +300,8 @@ static void chassis_debug_log(const chassis_line_input_t *line)
         lost_count,
         node_count,
         (int)chassis_target,
+        route_index,
+        route_length,
         motor_is_locked());
     debug_uart_send_str(buf);
 }
@@ -427,14 +513,18 @@ void chassis_follow_target(TargetPoint_t target)
     chassis_needs_pid_reset = 1;
 
     route_index = 0;
-    if (target == TARGET_C) {
-        route_table = route_a_to_c;
-        route_length = ROUTE_A_TO_C_LEN;
-        route_active = 1;
-    } else {
-        route_table = 0;
-        route_length = 0;
-        route_active = 0;
+    /* Select route by (mode, target).
+       Confirmed: DRV+TARGET_C, NAV/ADV+TARGET_A/D.
+       Unmatched combos (e.g. NAV+TARGET_B) -> ERROR, not free driving. */
+    route_table = chassis_route_lookup(app_state_get_mode(), target, &route_length);
+    route_active = (route_table != 0 && route_length > 0) ? 1 : 0;
+
+    if (!route_active) {
+        /* No route for this mode/target -- fail safe.
+           B/C routes are not yet confirmed and must not
+           fall back to pure line following. */
+        chassis_state = CHASSIS_ERROR;
+        return;
     }
 
     if (!motor_is_locked()) {

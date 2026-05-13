@@ -26,7 +26,7 @@
 
 /* active_count >= this value → intersection / node region.  Empirical
    threshold; tune on real track. */
-#define CHASSIS_NODE_ACTIVE_COUNT_THRESHOLD 4
+#define CHASSIS_NODE_ACTIVE_COUNT_THRESHOLD 3
 
 /* Encoder closed-loop: 0 = off (first-round default), 1 = on.
    Owned by Hardware A; keep off until encoder hardware is stable. */
