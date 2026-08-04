@@ -1,16 +1,23 @@
 {
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "EDC-SU",
-      "type": "ccs-debug",
-      "request": "launch",
-      "projectInfo": {
-        "name": "EDC-SU",
-        "resourceId": "/EDC-SU"
-      }
-    }
-  ]
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "EDC-SU",
+            "type": "ccs-debug",
+            "request": "launch",
+            "projectInfo": {
+                "name": "EDC-SU",
+                "resourceId": "/EDC-SU"
+            }
+        },
+        {
+            "name": "EDC-SU-lunqu1",
+            "type": "ccs-debug",
+            "request": "launch",
+            "projectInfo": {
+                "name": "EDC-SU-lunqu1",
+                "resourceId": "/EDC-SU-lunqu1"
+            }
+        }
+    ]
 }

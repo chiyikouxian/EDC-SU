@@ -4,34 +4,30 @@
 #include "app_common.h"
 
 /*
- * 8-channel red-light grayscale module:
- *   AD0/AD1/AD2 select X1..X8, OUT returns the selected comparator level.
+ * 6-channel IR line sensor over software I2C.
  *
- * Pin definitions come from ti_msp_dl_config.h:
- *   GRAY_SENSOR_PORT, GRAY_SENSOR_AD0_PIN, GRAY_SENSOR_AD1_PIN,
- *   GRAY_SENSOR_AD2_PIN, GRAY_SENSOR_OUT_PIN.
+ * Protocol from "2.快速上手.pdf":
+ *   I2C address 0x5C, register 5 returns all six digital channel results.
  *
- * Channel order:
- *   000 -> X1  001 -> X2  010 -> X3  011 -> X4
- *   100 -> X5  101 -> X6  110 -> X7  111 -> X8
+ * Wiring for this car:
+ *   PB1 = SCL, PB2 = SDA.
+ * The existing SysConfig names these old pins as GRAY_SENSOR_AD1/AD2; the
+ * driver aliases them as I2C lines to avoid regenerating SysConfig now.
  */
 
-#define GRAY_SENSOR_CHANNELS  8
-
-#define GRAY_AD_MASK  (GRAY_SENSOR_AD0_PIN | GRAY_SENSOR_AD1_PIN | GRAY_SENSOR_AD2_PIN)
+#define GRAY_SENSOR_CHANNELS  6
 
 /* Active level: 1 = black line makes OUT high.  Change to 0 for inverted modules. */
 #ifndef GRAY_ACTIVE_LEVEL
 #define GRAY_ACTIVE_LEVEL  1
 #endif
 
-/* Mux/comparator settle and anti-noise sampling. */
-#define GRAY_SETTLE_US             50
-#define GRAY_SAMPLE_COUNT           5
-#define GRAY_SAMPLE_INTERVAL_US     6
+/* Software I2C timing. */
+#define GRAY_I2C_DELAY_US           5
 
 void gray_sensor_init(void);
 void gray_sensor_read_all(uint8_t values[GRAY_SENSOR_CHANNELS]);
+bool gray_sensor_read_ok(void);
 bool gray_sensor_has_line(const uint8_t values[GRAY_SENSOR_CHANNELS]);
 bool gray_sensor_is_all_white(const uint8_t values[GRAY_SENSOR_CHANNELS]);
 const char *gray_sensor_debug_string(const uint8_t values[GRAY_SENSOR_CHANNELS]);

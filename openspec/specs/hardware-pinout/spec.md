@@ -14,7 +14,7 @@ The system SHALL bind the TB6612 four-channel motor driver signals to the GPIO p
 
 - **WHEN** `gpio_software_poll.syscfg` is generated
 - **THEN** `GPIO_MOTOR_AIN1` SHALL be assigned to `PA8`
-- **AND** `GPIO_MOTOR_AIN2` SHALL be assigned to `PA13`
+- **AND** `GPIO_MOTOR_AIN2` SHALL be assigned to `PA16`
 - **AND** `GPIO_MOTOR_BIN1` SHALL be assigned to `PB9`
 - **AND** `GPIO_MOTOR_BIN2` SHALL be assigned to `PB19`
 - **AND** `GPIO_MOTOR_STBY` SHALL be assigned to `PA15`
@@ -27,14 +27,11 @@ The system SHALL bind the TB6612 four-channel motor driver signals to the GPIO p
 - **AND** `GPIO_MOTOR_PWMC` SHALL be assigned to `PB4`
 - **AND** `GPIO_MOTOR_PWMD` SHALL be assigned to `PB20`
 
-#### Scenario: AIN2 avoids PA26
+#### Scenario: A-channel replacement pins are assigned
 
-- **WHEN** the A wheel AIN2 signal is checked
-- **THEN** it SHALL use `PA13`
-- **AND** it SHALL NOT use `PA26`
-- **AND** `Debug/ti_msp_dl_config.h` SHALL define `GPIO_MOTOR_AIN2_PORT` as `GPIOA`
-- **AND** `Debug/ti_msp_dl_config.h` SHALL define `GPIO_MOTOR_AIN2_PIN` as `DL_GPIO_PIN_13`
-- **AND** `Debug/ti_msp_dl_config.h` SHALL define `GPIO_MOTOR_AIN2_IOMUX` as `IOMUX_PINCM35`
+- **WHEN** the A wheel replacement signals are checked
+- **THEN** `GPIO_MOTOR_AIN2` SHALL use `PA16`
+- **AND** `GPIO_MOTOR_PWMA` SHALL remain on `PA28`
 
 ### Requirement: Main Control Peripheral Pin Assignment
 
@@ -43,9 +40,7 @@ The system SHALL keep the main-control peripheral pin assignments consistent wit
 #### Scenario: User IO and sensor pins are assigned
 
 - **WHEN** the GPIO configuration is generated
-- **THEN** `BUZZER_BUZZ` SHALL be assigned to `PB15`
-- **AND** `MODE_KEY_KEY` SHALL be assigned to `PA27`
-- **AND** `START_KEY_BTN` SHALL be assigned to `PA25`
+- **THEN** `START_KEY_BTN` SHALL be assigned to `PA25`
 - **AND** `GRAY_SENSOR_AD0` SHALL be assigned to `PB0`
 - **AND** `GRAY_SENSOR_AD1` SHALL be assigned to `PB1`
 - **AND** `GRAY_SENSOR_AD2` SHALL be assigned to `PB2`
@@ -66,7 +61,7 @@ The system SHALL reserve encoder GPIO pins without enabling encoder closed-loop 
 #### Scenario: Encoder pins are reserved
 
 - **WHEN** the GPIO encoder configuration is checked
-- **THEN** `GPIO_ENCODER_LF_A` SHALL be assigned to `PA22`
+- **THEN** `GPIO_ENCODER_LF_A` SHALL be assigned to `PB23`
 - **AND** `GPIO_ENCODER_LF_B` SHALL be assigned to `PA17`
 - **AND** `GPIO_ENCODER_LR_A` SHALL be assigned to `PA18`
 - **AND** `GPIO_ENCODER_LR_B` SHALL be assigned to `PA12`
@@ -75,8 +70,10 @@ The system SHALL reserve encoder GPIO pins without enabling encoder closed-loop 
 - **AND** `GPIO_ENCODER_RF_A` SHALL be assigned to `PB16`
 - **AND** `GPIO_ENCODER_RF_B` SHALL be assigned to `PA31`
 
-#### Scenario: Encoder closed-loop remains disabled
+#### Scenario: Encoder replacement pins avoid reserved debug pins
 
-- **WHEN** the current chassis configuration is checked
-- **THEN** `CHASSIS_USE_ENCODER` SHALL remain `0`
-- **AND** encoder pins SHALL NOT conflict with `GPIO_MOTOR_AIN2` on `PA13`
+- **WHEN** the replacement encoder pins are checked
+- **THEN** `GPIO_ENCODER_LF_A` SHALL use `PB23`
+- **AND** `GPIO_ENCODER_RF_B` SHALL remain on `PA31`
+- **AND** encoder pins SHALL NOT use `PA0` or `PA1`
+- **AND** encoder pulse counting MAY remain enabled without implementing speed closed-loop control

@@ -29,7 +29,7 @@
  *   - Main control (B) provides: error, line_detected, all_white,
  *     center_hit, active_count, tick, stale.
  *   - Main control does NOT provide: motor PWM, differential targets,
- *     PID parameters, intersection strategy, path action tables.
+ *     PID parameters, or chassis motor-control decisions.
  *   - Chassis (A) responsibility: read track_bridge_get() → PID/PD →
  *     drive motors.
  */

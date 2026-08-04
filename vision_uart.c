@@ -1,252 +1,419 @@
 #include "vision_uart.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
 #include "ti_msp_dl_config.h"
-#include <string.h>
 
 /*
- * Pure interrupt reception architecture:
- * VISION_UART_INST_IRQHandler is the SOLE byte feeder into the parser.
- * There is no polling path - app_state only consumes parsed results.
- * Parser state stays ISR-private, and result handoff uses a short IRQ mask
- * to avoid torn reads or clearing a frame while a new one is being published.
+ * Ball-position telemetry receiver. The ISR only moves bytes into a ring
+ * buffer; line assembly and parsing run in vision_uart_process() on the main
+ * loop, so a malformed or overlong line cannot stretch interrupt latency.
  */
 
-#define FRAME_BUF_SIZE  40
+#define VISION_RX_BUFFER_SIZE       512U
+#define VISION_RX_BUFFER_MASK       (VISION_RX_BUFFER_SIZE - 1U)
+#define VISION_LINE_BUFFER_SIZE     192U
+#define VISION_TELEMETRY_TIMEOUT_MS 250U
 
-typedef enum {
-    RX_WAIT_START,
-    RX_COLLECT
-} RxState_t;
+static volatile uint8_t rx_buffer[VISION_RX_BUFFER_SIZE];
+static volatile uint16_t rx_head;
+static volatile uint16_t rx_tail;
+static volatile uint32_t rx_drop_count;
+static volatile bool rx_discard_requested;
 
-/* volatile: shared between ISR (writer) and main loop (reader) */
-static volatile VisionResult_t last_result;
-static volatile bool           has_result;
+static char line_buffer[VISION_LINE_BUFFER_SIZE];
+static uint16_t line_length;
+static bool line_overflow;
 
-/* ISR-private: accessed ONLY from VISION_UART_INST_IRQHandler */
-static RxState_t rx_state;
-static char      rx_buf[FRAME_BUF_SIZE];
-static uint8_t   rx_len;
+volatile VisionTelemetry_t g_vision_telemetry;
 
-static void vision_uart_result_lock(void)
+static bool text_equals(const char *a, const char *b)
 {
-    NVIC_DisableIRQ(VISION_UART_INST_INT_IRQN);
-}
-
-static void vision_uart_result_unlock(void)
-{
-    NVIC_EnableIRQ(VISION_UART_INST_INT_IRQN);
-}
-
-/* ---- string compare helper (no stdlib dependency beyond string.h) ---- */
-
-static bool str_eq(const char *a, const char *b)
-{
-    while (*a && *b) {
-        if (*a != *b) return false;
-        a++; b++;
+    while ((*a != '\0') && (*b != '\0')) {
+        if (*a != *b) {
+            return false;
+        }
+        a++;
+        b++;
     }
     return *a == *b;
 }
 
-/* ---- field splitter: finds up to max_fields comma-separated tokens ---- */
-
-static int split_fields(char *line, char *fields[], int max_fields)
+static bool parse_u64(const char *text, uint64_t *out)
 {
-    int count = 0;
-    char *p = line;
-    while (*p && count < max_fields) {
-        fields[count++] = p;
-        while (*p && *p != ',') p++;
-        if (*p == ',') { *p = '\0'; p++; }
+    uint64_t value = 0U;
+    uint8_t digits = 0U;
+
+    if ((text == NULL) || (out == NULL) || (*text == '\0')) {
+        return false;
     }
-    return count;
+    while (*text != '\0') {
+        uint8_t digit;
+        if ((*text < '0') || (*text > '9')) {
+            return false;
+        }
+        digit = (uint8_t)(*text - '0');
+        if (value > (UINT64_MAX - digit) / 10U) {
+            return false;
+        }
+        value = value * 10U + digit;
+        digits++;
+        text++;
+    }
+    if (digits == 0U) {
+        return false;
+    }
+    *out = value;
+    return true;
 }
 
-/* ---- mapping tables ---- */
-
-typedef struct {
-    const char   *name;
-    Shape_t       shape;
-    TargetPoint_t expected_target;
-    bool          expected_valid;
-} ShapeEntry_t;
-
-static const ShapeEntry_t shape_table[] = {
-    { "CIRCLE",   SHAPE_CIRCLE,   TARGET_A,    true  },
-    { "TRIANGLE", SHAPE_TRIANGLE, TARGET_B,    true  },
-    { "RECT",     SHAPE_RECT,     TARGET_C,    true  },
-    { "PENTAGON", SHAPE_PENTAGON, TARGET_D,    true  },
-    { "NONE",     SHAPE_NONE,     TARGET_NONE, false },
-};
-
-#define SHAPE_TABLE_LEN  (sizeof(shape_table) / sizeof(shape_table[0]))
-
-static TargetPoint_t parse_target_char(char c)
+static bool parse_i32(const char *text, int32_t *out)
 {
-    switch (c) {
-        case 'A': return TARGET_A;
-        case 'B': return TARGET_B;
-        case 'C': return TARGET_C;
-        case 'D': return TARGET_D;
-        case 'X': return TARGET_NONE;
-        default:  return (TargetPoint_t)0xFF;
+    bool negative = false;
+    uint32_t value = 0U;
+    uint8_t digits = 0U;
+    uint32_t limit;
+
+    if ((text == NULL) || (out == NULL) || (*text == '\0')) {
+        return false;
     }
+    if (*text == '-') {
+        negative = true;
+        text++;
+    } else if (*text == '+') {
+        text++;
+    }
+    if (*text == '\0') {
+        return false;
+    }
+    limit = negative ? 2147483648U : 2147483647U;
+    while (*text != '\0') {
+        uint8_t digit;
+        if ((*text < '0') || (*text > '9')) {
+            return false;
+        }
+        digit = (uint8_t)(*text - '0');
+        if (value > (limit - digit) / 10U) {
+            return false;
+        }
+        value = value * 10U + digit;
+        digits++;
+        text++;
+    }
+    if (digits == 0U) {
+        return false;
+    }
+    if (negative) {
+        if (value == 2147483648U) {
+            *out = INT32_MIN;
+        } else {
+            *out = -(int32_t)value;
+        }
+    } else {
+        *out = (int32_t)value;
+    }
+    return true;
 }
 
-/* ---- frame parser ---- */
-
-static void process_frame(void)
+/* Accepts "123" or "123.4" and returns the value scaled by 10. A second
+   decimal digit is rejected rather than truncated, so a sender misconfigured
+   to more precision fails loudly instead of silently losing resolution. */
+static bool parse_fixed_x10(const char *text, int32_t *out)
 {
-    char *fields[3];
-    int n = split_fields(rx_buf, fields, 3);
-    if (n != 3) return;
+    bool negative = false;
+    uint32_t integer_part = 0U;
+    uint8_t fraction = 0U;
+    uint8_t fraction_digits = 0U;
+    uint8_t integer_digits = 0U;
+    uint32_t limit;
 
-    /* field 1: shape name */
-    const ShapeEntry_t *entry = NULL;
-    uint8_t i;
-    for (i = 0; i < SHAPE_TABLE_LEN; i++) {
-        if (str_eq(fields[0], shape_table[i].name)) {
-            entry = &shape_table[i];
-            break;
+    if ((text == NULL) || (out == NULL) || (*text == '\0')) {
+        return false;
+    }
+    if (*text == '-') {
+        negative = true;
+        text++;
+    } else if (*text == '+') {
+        text++;
+    }
+    if (*text == '\0') {
+        return false;
+    }
+    limit = negative ? 2147483648U / 10U : 2147483647U / 10U;
+    while ((*text >= '0') && (*text <= '9')) {
+        uint8_t digit = (uint8_t)(*text - '0');
+        if (integer_part > (limit - digit) / 10U) {
+            return false;
+        }
+        integer_part = integer_part * 10U + digit;
+        integer_digits++;
+        text++;
+    }
+    if (integer_digits == 0U) {
+        return false;
+    }
+    if (*text == '.') {
+        text++;
+        if ((*text < '0') || (*text > '9')) {
+            return false;
+        }
+        fraction = (uint8_t)(*text - '0');
+        fraction_digits = 1U;
+        text++;
+        if (*text != '\0') {
+            return false;
+        }
+    } else if (*text != '\0') {
+        return false;
+    }
+    if (fraction_digits == 0U) {
+        fraction = 0U;
+    }
+    if (integer_part > limit) {
+        return false;
+    }
+    {
+        uint32_t scaled = integer_part * 10U + fraction;
+        if (negative) {
+            if (scaled > 2147483648U) {
+                return false;
+            }
+            *out = (scaled == 2147483648U) ? INT32_MIN : -(int32_t)scaled;
+        } else {
+            if (scaled > 2147483647U) {
+                return false;
+            }
+            *out = (int32_t)scaled;
         }
     }
-    if (entry == NULL) return;
-
-    /* field 2: target letter (must be single char) */
-    if (fields[1][0] == '\0' || fields[1][1] != '\0') return;
-    TargetPoint_t tgt = parse_target_char(fields[1][0]);
-    if ((uint8_t)tgt == 0xFF) return;
-
-    /* field 3: valid flag (must be '0' or '1', single char) */
-    if (fields[2][0] == '\0' || fields[2][1] != '\0') return;
-    bool frame_valid;
-    if (fields[2][0] == '1')      frame_valid = true;
-    else if (fields[2][0] == '0') frame_valid = false;
-    else return;
-
-    /* strict cross-check: shape/target/valid must match mapping table */
-    if (tgt != entry->expected_target) return;
-    if (frame_valid != entry->expected_valid) return;
-
-    /* all checks passed */
-    last_result.shape  = entry->shape;
-    last_result.target = tgt;
-    last_result.valid  = frame_valid;
-    has_result = true;
+    return true;
 }
 
-/* ---- public API ---- */
+static bool parse_bool01(const char *text, bool *out)
+{
+    if ((text == NULL) || (out == NULL) || (text[0] == '\0') ||
+        (text[1] != '\0') || ((text[0] != '0') && (text[0] != '1'))) {
+        return false;
+    }
+    *out = text[0] == '1';
+    return true;
+}
+
+/* Splits "key=value,key=value,..." in place. All seven keys are mandatory and
+   duplicates are rejected, so a partially-formed line can never be mistaken
+   for a complete sample. Destroys the input buffer. */
+static bool parse_telemetry_line(char *line, VisionTelemetry_t *out)
+{
+    bool seen_timestamp = false;
+    bool seen_valid = false;
+    bool seen_position = false;
+    bool seen_velocity = false;
+    bool seen_x = false;
+    bool seen_y = false;
+    bool seen_recording = false;
+    char *field = line;
+    VisionTelemetry_t parsed = {0};
+
+    while (*field != '\0') {
+        char *key = field;
+        char *next = field;
+        char *equals;
+        char *value;
+        int32_t coordinate;
+
+        while ((*next != '\0') && (*next != ',')) {
+            next++;
+        }
+        if (*next == ',') {
+            *next = '\0';
+            next++;
+        } else {
+            next = NULL;
+        }
+        equals = key;
+        while ((*equals != '\0') && (*equals != '=')) {
+            equals++;
+        }
+        if ((*equals != '=') || (equals == key) || (equals[1] == '\0')) {
+            return false;
+        }
+        *equals = '\0';
+        value = equals + 1;
+        if (text_equals(key, "timestamp")) {
+            if (seen_timestamp ||
+                !parse_u64(value, &parsed.remote_timestamp_ms)) {
+                return false;
+            }
+            seen_timestamp = true;
+        } else if (text_equals(key, "valid")) {
+            if (seen_valid || !parse_bool01(value, &parsed.ball_valid)) {
+                return false;
+            }
+            seen_valid = true;
+        } else if (text_equals(key, "position_mm")) {
+            if (seen_position ||
+                !parse_fixed_x10(value, &parsed.position_mm_x10)) {
+                return false;
+            }
+            seen_position = true;
+        } else if (text_equals(key, "velocity_mm_s")) {
+            if (seen_velocity ||
+                !parse_fixed_x10(value, &parsed.velocity_mm_s_x10)) {
+                return false;
+            }
+            seen_velocity = true;
+        } else if (text_equals(key, "x")) {
+            if (seen_x || !parse_i32(value, &coordinate) ||
+                (coordinate < INT16_MIN) || (coordinate > INT16_MAX)) {
+                return false;
+            }
+            parsed.image_x = (int16_t)coordinate;
+            seen_x = true;
+        } else if (text_equals(key, "y")) {
+            if (seen_y || !parse_i32(value, &coordinate) ||
+                (coordinate < INT16_MIN) || (coordinate > INT16_MAX)) {
+                return false;
+            }
+            parsed.image_y = (int16_t)coordinate;
+            seen_y = true;
+        } else if (text_equals(key, "recording")) {
+            if (seen_recording || !parse_bool01(value, &parsed.recording)) {
+                return false;
+            }
+            seen_recording = true;
+        } else {
+            return false;
+        }
+        if (next == NULL) {
+            break;
+        }
+        field = next;
+    }
+    if (!(seen_timestamp && seen_valid && seen_position && seen_velocity &&
+          seen_x && seen_y && seen_recording)) {
+        return false;
+    }
+    *out = parsed;
+    return true;
+}
+
+static void process_line(uint32_t now_ms)
+{
+    VisionTelemetry_t parsed;
+
+    if (parse_telemetry_line(line_buffer, &parsed)) {
+        parsed.local_receive_ms = now_ms;
+        parsed.sample_count = g_vision_telemetry.sample_count + 1U;
+        parsed.link_fresh = true;
+        parsed.malformed_count = g_vision_telemetry.malformed_count;
+        parsed.overlength_count = g_vision_telemetry.overlength_count;
+        parsed.rx_drop_count = rx_drop_count;
+        g_vision_telemetry = parsed;
+    } else {
+        g_vision_telemetry.malformed_count++;
+    }
+}
 
 void vision_uart_init(void)
 {
-    last_result.shape  = SHAPE_NONE;
-    last_result.target = TARGET_NONE;
-    last_result.valid  = false;
-    has_result = false;
-    rx_state   = RX_WAIT_START;
-    rx_len     = 0;
-
+    rx_head = 0U;
+    rx_tail = 0U;
+    rx_drop_count = 0U;
+    rx_discard_requested = false;
+    line_length = 0U;
+    line_overflow = false;
+    g_vision_telemetry.remote_timestamp_ms = 0U;
+    g_vision_telemetry.position_mm_x10 = 0;
+    g_vision_telemetry.velocity_mm_s_x10 = 0;
+    g_vision_telemetry.image_x = -1;
+    g_vision_telemetry.image_y = -1;
+    g_vision_telemetry.ball_valid = false;
+    g_vision_telemetry.recording = false;
+    g_vision_telemetry.link_fresh = false;
+    g_vision_telemetry.local_receive_ms = 0U;
+    g_vision_telemetry.sample_count = 0U;
+    g_vision_telemetry.malformed_count = 0U;
+    g_vision_telemetry.overlength_count = 0U;
+    g_vision_telemetry.rx_drop_count = 0U;
+    DL_UART_Main_disableInterrupt(VISION_UART_INST, DL_UART_MAIN_INTERRUPT_TX);
     DL_UART_Main_enableInterrupt(VISION_UART_INST, DL_UART_MAIN_INTERRUPT_RX);
     NVIC_ClearPendingIRQ(VISION_UART_INST_INT_IRQN);
     NVIC_EnableIRQ(VISION_UART_INST_INT_IRQN);
 }
 
-/* VISION_UART RX interrupt handler - drains RX FIFO and feeds parser */
+void vision_uart_process(uint32_t now_ms)
+{
+    while (rx_tail != rx_head) {
+        uint8_t byte = rx_buffer[rx_tail];
+
+        rx_tail = (uint16_t)((rx_tail + 1U) & VISION_RX_BUFFER_MASK);
+        /* A ring-buffer overrun happened somewhere inside the current line, so
+           the line is already corrupt: drop it rather than parse a splice. */
+        if (rx_discard_requested) {
+            line_overflow = true;
+            rx_discard_requested = false;
+        }
+        if (byte == '\r') {
+            continue;
+        }
+        if (byte == '\n') {
+            if (line_overflow) {
+                g_vision_telemetry.overlength_count++;
+            } else {
+                line_buffer[line_length] = '\0';
+                process_line(now_ms);
+            }
+            line_length = 0U;
+            line_overflow = false;
+        } else if (!line_overflow) {
+            if (line_length < (VISION_LINE_BUFFER_SIZE - 1U)) {
+                line_buffer[line_length++] = (char)byte;
+            } else {
+                line_overflow = true;
+            }
+        }
+    }
+    if (g_vision_telemetry.link_fresh &&
+        ((uint32_t)(now_ms - g_vision_telemetry.local_receive_ms) >
+         VISION_TELEMETRY_TIMEOUT_MS)) {
+        g_vision_telemetry.link_fresh = false;
+    }
+    g_vision_telemetry.rx_drop_count = rx_drop_count;
+}
+
+bool vision_uart_get_telemetry(VisionTelemetry_t *out)
+{
+    uint32_t primask;
+
+    if (out == NULL) {
+        return false;
+    }
+    primask = __get_PRIMASK();
+    __disable_irq();
+    *out = (VisionTelemetry_t)g_vision_telemetry;
+    if (primask == 0U) {
+        __enable_irq();
+    }
+    return out->link_fresh;
+}
+
 void VISION_UART_INST_IRQHandler(void)
 {
-    switch (DL_UART_Main_getPendingInterrupt(VISION_UART_INST)) {
-    case DL_UART_MAIN_IIDX_RX:
+    DL_UART_IIDX pending = DL_UART_Main_getPendingInterrupt(VISION_UART_INST);
+
+    if (pending == DL_UART_MAIN_IIDX_RX) {
         while (!DL_UART_isRXFIFOEmpty(VISION_UART_INST)) {
+            uint16_t next = (uint16_t)((rx_head + 1U) & VISION_RX_BUFFER_MASK);
             uint8_t byte = DL_UART_receiveData(VISION_UART_INST);
-            vision_uart_feed_byte(byte);
+
+            if (next == rx_tail) {
+                rx_drop_count++;
+                rx_discard_requested = true;
+            } else {
+                rx_buffer[rx_head] = byte;
+                rx_head = next;
+            }
         }
-        break;
-    default:
-        break;
     }
-}
-
-void vision_uart_feed_byte(uint8_t byte)
-{
-    char c = (char)byte;
-
-    switch (rx_state) {
-    case RX_WAIT_START:
-        if (c == '$') {
-            rx_len   = 0;
-            rx_state = RX_COLLECT;
-        }
-        break;
-
-    case RX_COLLECT:
-        if (c == '$') {
-            rx_len   = 0;
-            break;
-        }
-        if (c == '\r') {
-            break;
-        }
-        if (c == '\n') {
-            rx_buf[rx_len] = '\0';
-            process_frame();
-            rx_state = RX_WAIT_START;
-            rx_len   = 0;
-            break;
-        }
-        if (rx_len < FRAME_BUF_SIZE - 1) {
-            rx_buf[rx_len++] = c;
-        } else {
-            rx_state = RX_WAIT_START;
-            rx_len   = 0;
-        }
-        break;
-    }
-}
-
-bool vision_uart_has_result(void)
-{
-    bool result_ready;
-
-    vision_uart_result_lock();
-    result_ready = has_result;
-    vision_uart_result_unlock();
-
-    return result_ready;
-}
-
-VisionResult_t vision_uart_get_result(void)
-{
-    VisionResult_t result;
-
-    vision_uart_result_lock();
-    result = (VisionResult_t)last_result;
-    vision_uart_result_unlock();
-
-    return result;
-}
-
-bool vision_uart_take_result(VisionResult_t *out)
-{
-    bool taken = false;
-
-    vision_uart_result_lock();
-    if (has_result) {
-        if (out != NULL) {
-            *out = (VisionResult_t)last_result;
-        }
-        has_result = false;
-        taken = true;
-    }
-    vision_uart_result_unlock();
-
-    return taken;
-}
-
-void vision_uart_clear(void)
-{
-    vision_uart_result_lock();
-    has_result = false;
-    last_result.shape  = SHAPE_NONE;
-    last_result.target = TARGET_NONE;
-    last_result.valid  = false;
-    vision_uart_result_unlock();
 }

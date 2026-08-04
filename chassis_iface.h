@@ -16,6 +16,14 @@
    [-100,+100] permanently.  Tune during vehicle calibration. */
 #define CHASSIS_TRACK_ERROR_SCALE          1
 
+/* 1 = the side carrying the tracking module is the logical front.
+ * This rotates the chassis coordinate system by 180 degrees: logical left
+ * and right wheels map to the opposite physical wheels, and forward is the
+ * former reverse direction.  Set to 0 to return to the original layout. */
+#ifndef CHASSIS_REVERSE_FORWARD_DIRECTION
+#define CHASSIS_REVERSE_FORWARD_DIRECTION  1
+#endif
+
 /* Lost-line tick thresholds (logical ticks, currently 10 ms each).
    Short: begin find-line rotation.  Long: brake protection stop.
    Physical time = ticks × TICK_MS (currently 10 ms). */
@@ -24,13 +32,29 @@
 #define CHASSIS_LOST_LINE_SHORT_TICKS      18   /* 180 ms grace/coast, then find */
 #define CHASSIS_LOST_LINE_LONG_TICKS       180  /* 1800 ms protection stop */
 
-/* active_count >= this value → intersection / node region.  Empirical
-   threshold; tune on real track. */
-#define CHASSIS_NODE_ACTIVE_COUNT_THRESHOLD 3
+/* Encoder feedback: 0 = off, 1 = count GPIO_ENCODER quadrature pulses. */
+#ifndef CHASSIS_USE_ENCODER
+#define CHASSIS_USE_ENCODER                1
+#endif
 
-/* Encoder closed-loop: 0 = off (first-round default), 1 = on.
-   Owned by Hardware A; keep off until encoder hardware is stable. */
-#define CHASSIS_USE_ENCODER                0
+/* Wheel-speed feedback: 1 = encoder PI/PID correction, 0 = direct open loop.
+   The loop runs whenever the chassis receives its 10 ms wheel command. */
+#ifndef CHASSIS_USE_SPEED_PID
+#define CHASSIS_USE_SPEED_PID              1
+#endif
+
+/* Encoder transitions expected in 10 ms for one motor-command unit, x100.
+   The raised-wheel test measured about 6.1 transitions at command 8, so the
+   calibrated value is 6.1 / 8 = 0.76 transitions per command unit. */
+#define CHASSIS_SPEED_COUNTS_PER_CMD_X100  42
+
+/* pid.c gains use a scale of 100.  Error is encoder transitions x100 and
+   output is motor command units.  PI control for faster speed response. */
+#define CHASSIS_SPEED_PID_KP               5
+#define CHASSIS_SPEED_PID_KI               2
+#define CHASSIS_SPEED_PID_KD               0
+#define CHASSIS_SPEED_PID_CORRECTION_LIMIT 12
+#define CHASSIS_SPEED_PID_INTEGRAL_LIMIT   1500
 
 /* ========================================================================
  * Contract types — stable API between app_state and chassis.
@@ -84,15 +108,20 @@ void  chassis_set_target(int target);
 void  chassis_follow_target_ex(int target);
 void  chassis_run_line(void);
 
-int   chassis_get_node_count(void);
 int   chassis_is_finished(void);
 
-/* Encoder interface — Phase 1 stubs (encoder=0, always return 0).
-   GPIO_ENCODER not configured in syscfg. */
+/* Encoder interface. chassis_encoder_poll() is called from the 1 ms main loop. */
+void chassis_encoder_poll(void);
 void chassis_encoder_reset(void);
-void chassis_encoder_get_counts(int *e1, int *e2, int *e3, int *e4);
+void chassis_encoder_get_counts(int *left, int *right);
 int  chassis_encoder_get_left_count(void);
 int  chassis_encoder_get_right_count(void);
+void chassis_speed_pid_get_debug(int *target_left_x100,
+                                 int *target_right_x100,
+                                 int *measured_left_x100,
+                                 int *measured_right_x100,
+                                 int *pwm_left,
+                                 int *pwm_right);
 
 /* Internal state query (debug only — returns chassis_state_t cast to int) */
 int  chassis_get_state(void);

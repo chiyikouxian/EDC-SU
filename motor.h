@@ -5,7 +5,6 @@
 
 void motor_init(void);
 void motor_set_speed(int left, int right);
-void motor_set_wheels(int left_front, int left_rear, int right_rear, int right_front);
 void motor_set_raw(int left, int right);
 void motor_update_pwm(void);
 void motor_force_forward_full(void);

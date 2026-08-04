@@ -22,9 +22,7 @@
 - 转弯后冷却期，防止转弯退出后立即反转
 - PID 输出低通滤波，消除传感器抖动导致的抽搐
 - 丢线惯性滑行期，避免短暂丢线触发旋转找线
-- PA27 模式切换按键，低电平按下，空闲状态下循环切换 `DRV -> NAV -> ADV`
 - PA25 启动按键，低电平按下，长按 3 秒触发启动
-- PB15 有源蜂鸣器，低电平触发
 - UART1 视觉通信，`PB6=TX`、`PB7=RX`、`9600 8N1`
 - UART1 RX 纯中断接收，避免轮询与中断并发驱动同一解析器
 - 视觉结果通过原子读取/清除接口从 UART ISR 交给主状态机
@@ -37,7 +35,7 @@
 暂未完成：
 
 - A/B/D 目标路线表（结构已就绪，只需补充动作序列）
-- 编码器速度闭环（`CHASSIS_USE_ENCODER=0`，后续联调打开）
+- 编码器速度闭环（当前已启用 1 ms 轮询计数，尚未接入速度闭环）
 - 云台 PWM 或步进电机实物控制
 - 树莓派 OpenCV 实机识别程序接入
 - 电源系统和整车联调
@@ -46,15 +44,17 @@
 
 | 功能 | 外设/引脚 | 说明 |
 |---|---|---|
-| 模式按键 | PA27 GPIO 输入上拉 | 低电平按下 |
 | 启动按键 | PA25 GPIO 输入上拉 | 低电平按下，长按 3 秒启动 |
-| 蜂鸣器 | PB15 GPIO 输出 | 有源蜂鸣器，低电平响 |
 | 调试串口 | UART0 PA10 TX / PA11 RX | 9600 8N1，输出状态 |
 | 视觉串口 | UART1 PB6 TX / PB7 RX | 9600 8N1，接收树莓派视觉帧 |
 | 灰度传感器 AD0 | PB0 GPIO 输出 | 通道选择位 0 (LSB) |
 | 灰度传感器 AD1 | PB1 GPIO 输出 | 通道选择位 1 |
 | 灰度传感器 AD2 | PB2 GPIO 输出 | 通道选择位 2 (MSB) |
 | 灰度传感器 OUT | PB3 GPIO 输入上拉 | 8 路复用数字输出 |
+| 电机 A AIN2 | PA16 GPIO 输出 | 替代原 PA13 |
+| 电机 A PWMA | PA28 GPIO 输出 | 保留原 PWMA 引脚 |
+| 左前编码器 A 相 | PB23 GPIO 输入上拉 | 替代原 PA22 |
+| 右前编码器 B 相 | PA31 GPIO 输入上拉 | 保留原 RF_B 引脚 |
 
 ## 灰度传感器
 
@@ -229,17 +229,18 @@ motor_set_speed(L, R)                  [Hardware A TB6612 驱动]
 | `CHASSIS_USE_TRACK_BRIDGE` | `1` | 主输入路径：1=bridge, 0=stub fallback |
 | `CHASSIS_TRACK_ERROR_SCALE` | `1` | bridge error [-100,+100] → PID 误差尺度 |
 | `CHASSIS_BASE_SPEED` | `16` | 直线基础速度 |
+| `CHASSIS_STRAIGHT_SPEED` | `24` | 居中且无转向提示时的直线提速 |
 | `CHASSIS_CURVE_SPEED` | `10` | 弯道降速 |
-| `CHASSIS_FIND_SPEED` | `40` | 丢线旋转找线速度 |
-| `CHASSIS_TURN_PRIORITY_SPEED` | `60` | 路口转弯原地旋转速度 |
-| `CHASSIS_TURN_PRIORITY_TICKS` | `42` | 转弯最大持续 tick 数 |
-| `CHASSIS_TURN_PRIORITY_MIN_TICKS` | `25` | 转弯盲转最小 tick 数（不检查退出条件） |
+| `CHASSIS_FIND_SPEED` | `30` | 丢线旋转找线速度 |
+| `CHASSIS_TURN_PRIORITY_SPEED` | `36` | 路口转弯原地旋转速度 |
+| `CHASSIS_TURN_PRIORITY_TICKS` | `40` | 转弯最大持续 tick 数 |
+| `CHASSIS_TURN_PRIORITY_MIN_TICKS` | `23` | 转弯盲转最小 tick 数（不检查退出条件） |
 | `CHASSIS_TURN_COOLDOWN_TICKS` | `100` | 转弯后冷却期 tick 数 |
 | `CHASSIS_LOST_LINE_SHORT_TICKS` | `18` | 丢线惯性滑行期（180ms），之后进入旋转找线 |
 | `CHASSIS_LOST_LINE_LONG_TICKS` | `180` | 长时丢线刹车保护（1800ms） |
 | `CHASSIS_NODE_ACTIVE_COUNT_THRESHOLD` | `6` | active_count ≥ 此值视为节点/交叉 |
 | `CHASSIS_CROSS_CONFIRM` | `4` | 节点确认帧数 |
-| `CHASSIS_USE_ENCODER` | `0` | 编码器闭环，首轮默认关闭 |
+| `CHASSIS_USE_ENCODER` | `1` | 编码器计数反馈，未接入速度闭环 |
 | PID 参数 | Kp=30, Ki=0, Kd=16 | 输出限幅 ±30 |
 
 ### 安全规则
@@ -306,8 +307,8 @@ S=IDLE M=DRV T=- C=IDL G=X1:0 X2:0 X3:0 X4:1 X5:1 X6:0 X7:0 X8:0 L=E:+000 HIT B=
 
 ### 2. 基础导航 NAV
 
-1. 短按 PA27 一次切换到 `NAV`
-2. 长按 PA25 约 3 秒
+1. 当前纯循迹固件不使用模式按键
+2. 当前纯循迹固件上电自动启动
 3. DEBUG_UART 显示 `S=FDET`
 4. 通过 UART1 发送视觉帧，例如：
 
@@ -315,14 +316,13 @@ S=IDLE M=DRV T=- C=IDL G=X1:0 X2:0 X3:0 X4:1 X5:1 X6:0 X7:0 X8:0 L=E:+000 HIT B=
 $RECT,C,1\r\n
 ```
 
-5. 蜂鸣器响 3 声
-6. 进入 `RUN M=NAV T=C C=FOLL`
+5. 进入 `RUN M=NAV T=C C=FOLL`
 7. 约 5 秒后 dry-run 模拟到达，完成蜂鸣后回到 `IDLE`
 
 ### 3. 高级导航 ADV
 
-1. 短按 PA27 两次切换到 `ADV`
-2. 长按 PA25 约 3 秒
+1. 当前纯循迹固件不使用模式按键
+2. 当前纯循迹固件上电自动启动
 3. DEBUG_UART 显示 `S=GSCAN`
 4. 通过 UART1 发送视觉帧，例如：
 
@@ -330,7 +330,7 @@ $RECT,C,1\r\n
 $CIRCLE,A,1\r\n
 ```
 
-5. 云台扫描占位停止，蜂鸣器响 3 声
+5. 云台扫描占位停止
 6. 进入 `RUN M=ADV T=A C=FOLL`
 7. dry-run 到达后完成蜂鸣，回到 `IDLE`
 
@@ -397,9 +397,7 @@ ChassisStatus_t chassis_get_status(void);
 |---|---|
 | `main.c` | 主入口，初始化模块，10 ms 主循环，DEBUG_UART 状态输出 |
 | `app_state.c/h` | 主控状态机 |
-| `mode_key.c/h` | PA27 模式按键 |
 | `start_key.c/h` | PA25 长按启动 |
-| `buzzer.c/h` | PB15 非阻塞蜂鸣器序列 |
 | `vision_uart.c/h` | UART1 中断接收与视觉帧解析 |
 | `chassis_iface.c/h` | 底盘接口合同，bridge-consuming 真实实现（原 dry-run stub 已替换） |
 | `gimbal.c/h` | 云台接口占位 |

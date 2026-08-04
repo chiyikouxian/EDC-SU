@@ -86,8 +86,8 @@
 
 ## Hardware Pinout Notes
 
-- Current motor AIN2 assignment is `PA13`, not `PA26`.
-- `GPIO_MOTOR_AIN2_PORT` SHALL be `GPIOA`, `GPIO_MOTOR_AIN2_PIN` SHALL be `DL_GPIO_PIN_13`, and `GPIO_MOTOR_AIN2_IOMUX` SHALL be `IOMUX_PINCM35`.
-- `PA26` is not used for A wheel AIN2 in the current EDC-SU firmware because Hardware A testing showed A wheel reverse failure on the PA26 route.
-- `PB13` remains `GPIO_MOTOR_PWMB`; this is a different port from `PA13` and is not a conflict.
-- Encoder pins remain reserved but disabled by `CHASSIS_USE_ENCODER = 0`.
+- Current motor AIN2 assignment is `PA16`, replacing the original `PA13`.
+- Current motor PWMA assignment remains `PA28`.
+- Current encoder replacement pin is `GPIO_ENCODER_LF_A=PB23`, replacing the original `PA22`.
+- Current `GPIO_ENCODER_RF_B` assignment remains `PA31`.
+- Encoder pins are counted by 1 ms GPIO polling in the current firmware; encoder speed closed-loop control is not implemented yet.

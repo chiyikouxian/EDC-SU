@@ -1,10 +1,10 @@
 #include "line_track.h"
 #include "gray_sensor.h"
 
-#define LINE_CENTER_X2  7   /* 2 * 3.5, centre between X4 and X5 */
+#define LINE_CENTER_X2  5   /* 2 * 2.5, centre between X3 and X4 */
 #define LINE_ERROR_DEADBAND  5
 #define LINE_LOST_HOLD_FRAMES  5
-#define LINE_SMOOTH_DELTA      35
+#define LINE_SMOOTH_DELTA      20
 
 static int8_t last_center_x2 = LINE_CENTER_X2;
 static int16_t last_error = 0;
@@ -154,12 +154,22 @@ void line_track_compute(const uint8_t values[GRAY_SENSOR_CHANNELS],
 
     left_edge_active = (values[0] == GRAY_ACTIVE_LEVEL) ||
                        (values[1] == GRAY_ACTIVE_LEVEL);
-    right_edge_active = (values[6] == GRAY_ACTIVE_LEVEL) ||
-                        (values[7] == GRAY_ACTIVE_LEVEL);
-    center_active = (values[3] == GRAY_ACTIVE_LEVEL) ||
-                    (values[4] == GRAY_ACTIVE_LEVEL);
+    right_edge_active = (values[4] == GRAY_ACTIVE_LEVEL) ||
+                        (values[5] == GRAY_ACTIVE_LEVEL);
+    center_active = (values[2] == GRAY_ACTIVE_LEVEL) ||
+                    (values[3] == GRAY_ACTIVE_LEVEL);
 
-    if (center_active && active_count >= 3) {
+    /* Two outer black probes identify a sharp-corner candidate early.  The
+     * chassis layer confirms it across consecutive frames before pivoting. */
+    if (values[0] == GRAY_ACTIVE_LEVEL &&
+        values[1] == GRAY_ACTIVE_LEVEL &&
+        !right_edge_active) {
+        out->turn_hint = LINE_TRACK_TURN_HINT_LEFT;
+    } else if (values[4] == GRAY_ACTIVE_LEVEL &&
+               values[5] == GRAY_ACTIVE_LEVEL &&
+               !left_edge_active) {
+        out->turn_hint = LINE_TRACK_TURN_HINT_RIGHT;
+    } else if (center_active && active_count >= 3) {
         if (left_edge_active && !right_edge_active) {
             out->turn_hint = LINE_TRACK_TURN_HINT_LEFT;
         } else if (right_edge_active && !left_edge_active) {
